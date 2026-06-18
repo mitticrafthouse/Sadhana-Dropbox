@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import matplotlib.pyplot as plt
 
-# ==============================
+# =====================
 # CONFIG
-# ==============================
+# =====================
 MIN_BALANCE = 500
 
 INDICES = {
@@ -15,9 +16,9 @@ INDICES = {
     "SENSEX": {"lot": 10, "step": 100}
 }
 
-# ==============================
-# LOGIN SYSTEM
-# ==============================
+# =====================
+# LOGIN
+# =====================
 USERS = {"admin": "admin123"}
 
 def login():
@@ -34,87 +35,107 @@ def login():
     return st.session_state.get("logged_in", False)
 
 
-# ==============================
-# DHAN WALLET (Mock / Replace API)
-# ==============================
+# =====================
+# WALLET (Replace with Dhan API)
+# =====================
 def get_wallet_balance():
-    try:
-        # ✅ Replace with real Dhan API
-        # Example:
-        # from dhanhq import dhanhq
-        # client = dhanhq("CLIENT_ID","ACCESS_TOKEN")
-        # funds = client.get_fund_limits()
-        # return funds['data']['availabelBalance']
-
-        return 12000  # mock value (for deploy)
-    except:
-        return 0
+    return 12000  # Replace with real Dhan API
 
 
-# ==============================
-# AUTO MODE CHECK
-# ==============================
 def check_auto_mode():
     bal = get_wallet_balance()
-    if bal < MIN_BALANCE:
-        return False, bal
-    return True, bal
+    return (bal >= MIN_BALANCE), bal
 
 
-# ==============================
+# =====================
+# TELEGRAM
+# =====================
+BOT_TOKEN = "YOUR_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
+
+def send_telegram(msg):
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": msg}
+        )
+    except:
+        pass
+
+
+# =====================
+# MOCK LIVE DATA (Replace with NSE API)
+# =====================
+def get_live_data():
+    return pd.DataFrame({
+        "close": np.random.randint(100, 200, 200),
+        "volume": np.random.randint(1000, 5000, 200)
+    })
+
+
+# =====================
 # INDICATORS
-# ==============================
-def calculate_indicators(df):
+# =====================
+def add_indicators(df):
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
     df['vwap'] = (df['volume'] * df['close']).cumsum() / df['volume'].cumsum()
     return df
 
 
-# ==============================
-# SIGNAL LOGIC
-# ==============================
-def generate_signal(df):
-    df = calculate_indicators(df)
+# =====================
+# SIGNAL
+# =====================
+def get_signal(df):
+    df = add_indicators(df)
+    row = df.iloc[-1]
 
-    latest = df.iloc[-1]
-
-    if latest['ema9'] > latest['ema21'] and latest['close'] > latest['vwap']:
+    if row['ema9'] > row['ema21'] and row['close'] > row['vwap']:
         return "BUY CE"
-    elif latest['ema9'] < latest['ema21'] and latest['close'] < latest['vwap']:
+    elif row['ema9'] < row['ema21'] and row['close'] < row['vwap']:
         return "BUY PE"
 
     return None
 
 
-# ==============================
-# RISK MANAGEMENT
-# ==============================
-def position_size(index, sl_points):
+# =====================
+# RISK + POSITION SIZE
+# =====================
+def position_size(index, sl_points=12):
     capital = get_wallet_balance()
-    risk_amt = capital * 0.01
+    risk = capital * 0.01
 
-    lot_size = INDICES[index]["lot"]
+    lot = INDICES[index]["lot"]
+    qty = int(risk / sl_points)
 
-    qty = int(risk_amt / sl_points)
-    lots = max(1, qty // lot_size)
-
-    return lots * lot_size
+    return max(lot, (qty // lot) * lot)
 
 
-def trade_levels(entry):
+def levels(entry):
     return entry + 45, entry - 12
 
 
-# ==============================
-# BACKTEST ENGINE
-# ==============================
-def run_backtest(df):
-    df = calculate_indicators(df)
+# =====================
+# TRAILING SL
+# =====================
+def trailing_sl(entry, price, sl):
+    if price - entry >= 15:
+        return entry
+    if price - entry >= 25:
+        return entry + 10
+    if price - entry >= 35:
+        return entry + 20
+    return sl
 
+
+# =====================
+# BACKTEST
+# =====================
+def backtest(df):
+    df = add_indicators(df)
     trades = []
 
-    for i in range(21, len(df)):
+    for i in range(20, len(df)):
         row = df.iloc[i]
 
         if row['ema9'] > row['ema21'] and row['close'] > row['vwap']:
@@ -135,102 +156,109 @@ def run_backtest(df):
     return trades
 
 
-# ==============================
+# =====================
 # UI START
-# ==============================
-st.set_page_config(page_title="Options Algo", layout="wide")
+# =====================
+st.set_page_config(layout="wide")
 
 if not login():
     st.stop()
 
-st.title("📈 Options Algo Trading Dashboard")
+st.title("📈 Options Algo Dashboard")
 
-# ==============================
-# WALLET DISPLAY
-# ==============================
+# =====================
+# WALLET STATUS
+# =====================
 auto_mode, balance = check_auto_mode()
 
-st.sidebar.subheader("💰 Wallet Balance")
+st.sidebar.subheader("💰 Wallet")
 st.sidebar.write(f"₹{balance}")
 
+mode = st.sidebar.radio("Mode", ["AUTO", "MANUAL"])
+
 if not auto_mode:
-    st.warning("⚠️ Low Balance! Auto Mode Disabled")
+    st.error("⚠️ Balance < ₹500 → AUTO DISABLED")
+    mode = "MANUAL"
 
-    st.markdown("""
-    <div style='background-color:#ff4b4b;padding:15px;border-radius:10px;color:white'>
-        ❌ AUTO MODE DISABLED<br>
-        Balance below ₹500<br>
-        Please add funds
-    </div>
-    """, unsafe_allow_html=True)
+# =====================
+# INDEX
+# =====================
+index = st.selectbox("Select Index", list(INDICES.keys()))
 
+# =====================
+# DATA
+# =====================
+data_mode = st.radio("Data Mode", ["Live", "Upload CSV"])
+
+if data_mode == "Live":
+    df = get_live_data()
 else:
-    st.success("✅ AUTO MODE ACTIVE")
+    file = st.file_uploader("Upload CSV")
+    if file:
+        df = pd.read_csv(file)
+    else:
+        df = None
 
+# =====================
+# SIGNAL
+# =====================
+if df is not None:
 
-# ==============================
-# INDEX SELECT
-# ==============================
-index = st.selectbox(
-    "Select Index",
-    ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]
-)
-
-# ==============================
-# FILE UPLOAD
-# ==============================
-file = st.file_uploader("Upload OHLC CSV")
-
-if file:
-    df = pd.read_csv(file)
-
-    st.subheader("📊 Market Data")
+    st.subheader("📊 Market Snapshot")
     st.dataframe(df.tail())
 
-    signal = generate_signal(df)
-
-    st.subheader("📡 LIVE SIGNAL")
+    signal = get_signal(df)
 
     if signal:
         entry = df.iloc[-1]['close']
-        target, sl = trade_levels(entry)
-        qty = position_size(index, 12)
+        target, sl = levels(entry)
+        qty = position_size(index)
 
-        st.success(f"{signal} @ {entry}")
-        st.write(f"🎯 Target: {target}")
-        st.write(f"🛑 SL: {sl}")
-        st.write(f"📦 Quantity: {qty}")
+        st.markdown(f"""
+        <div style='background:#111;padding:20px;border-radius:10px;color:white'>
+        <h2>⚡ {signal} - {index}</h2>
+        Entry: ₹{entry} <br>
+        Target: ₹{target} <br>
+        SL: ₹{sl} <br>
+        Qty: {qty}
+        </div>
+        """, unsafe_allow_html=True)
 
-        # AUTO / MANUAL info
-        if auto_mode:
-            st.info("🤖 Executing in AUTO mode (Dhan API)")
+        # Telegram
+        send_telegram(f"{index} {signal} @ {entry} | T:{target} SL:{sl}")
+
+        # AUTO EXECUTION
+        if mode == "AUTO" and auto_mode:
+            st.success("✅ Order sent to Dhan (Simulated)")
         else:
-            st.info("👁 Manual Trade Mode")
+            st.info("👁 Manual Mode")
+
+        # Trailing SL Demo
+        current = entry + np.random.randint(-5, 50)
+        new_sl = trailing_sl(entry, current, sl)
+        st.write(f"📉 Trailing SL: {new_sl}")
 
     else:
         st.info("No Signal")
 
-# ==============================
+# =====================
 # BACKTEST
-# ==============================
+# =====================
 st.subheader("📊 Backtesting")
 
-if file and st.button("Run Backtest"):
-    trades = run_backtest(df)
+if df is not None and st.button("Run Backtest"):
+    trades = backtest(df)
 
     if trades:
         pnl = sum(trades)
-        win_rate = len([t for t in trades if t > 0]) / len(trades)
+        win = len([t for t in trades if t > 0]) / len(trades)
 
-        st.write(f"Total Trades: {len(trades)}")
-        st.write(f"Win Rate: {round(win_rate*100,2)}%")
-        st.write(f"Net P&L (points): {pnl}")
+        st.write(f"Trades: {len(trades)}")
+        st.write(f"Win Rate: {round(win*100,2)}%")
+        st.write(f"P&L: {pnl}")
 
-    else:
-        st.warning("No trades found")
-
-# ==============================
-# FOOTER
-# ==============================
-st.markdown("---")
-st.caption("🚀 EMA + VWAP Options Scalper (Auto + Risk Managed)")
+        cum = np.cumsum(trades)
+        fig, ax = plt.subplots()
+        ax.plot(cum)
+        ax.set_title("Equity Curve")
+        st.pyplot(fig)
